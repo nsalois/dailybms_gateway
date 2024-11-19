@@ -124,4 +124,4 @@ while True:
     # Publish JSON string
     mqtt_client.publish_message("bms/data", bms_data_json)
 
-    time.sleep(10)  # Delay for 1 second
+    time.sleep(1)  # Delay for 1 second
