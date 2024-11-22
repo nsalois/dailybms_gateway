@@ -10,6 +10,7 @@ class MQTTClient:
         self.mqtt_user = secrets['mqtt_user']
         self.mqtt_password = secrets['mqtt_password']
         self.pool = socketpool.SocketPool(wifi.radio)
+        #self.socket_timeout=10  # Set socket timeout to 10 seconds
         self.mqtt_client = MQTT.MQTT(
             broker=self.mqtt_broker,
             username=self.mqtt_user,
@@ -67,5 +68,5 @@ class MQTTClient:
 
     def publish_message(self, topic, message):
         if message is None:
-            message = "default_value"  # Provide a default value if message is None
+            message = "NNNNNNN"  # Provide a default value if message is None
         self.mqtt_client.publish(topic, str(message))

@@ -30,6 +30,8 @@ class Daly_BMS_UART:
         BMS_RESET                   = 0x00
         PACK_THRESHOLDS             = 0x5A
         CELL_THRESHOLDS             = 0x59
+        READ_SOC                    = 0x61
+        SET_SOC                     = 0x21
 
     def __init__(self, uart):
         self.uart = uart
@@ -40,8 +42,6 @@ class Daly_BMS_UART:
         self.my_txBuffer[0] = START_BYTE
         self.my_txBuffer[1] = HOST_ADDRESS
         self.my_txBuffer[3] = DATA_LENGTH
-        for i in range(4, 12):
-            self.my_txBuffer[i] = BUFFER_VALUE
         self.get = {
             "packVoltage": 0.0,
             "collectedVoltage": 0.0,
@@ -139,7 +139,14 @@ class Daly_BMS_UART:
             47: {"description": "lowVoltageNoChargingFail", "active": False},
         }
         
-    def sendCommand(self, cmdID):
+    def sendCommand(self, cmdID, data=None):
+        if data is None:
+            data = [0x00] * 8  # Default data is 8 bytes of 0x00
+
+        # Ensure data is exactly 8 bytes
+        if len(data) != 8:
+            raise ValueError("Data must be exactly 8 bytes")
+    
         # Wait until RX is done before sending a new command, unless it's the first pass
         if not self.firstpass:
             while not self.rx_done:
@@ -149,16 +156,21 @@ class Daly_BMS_UART:
         while self.uart.in_waiting > 0:
             self.uart.read(1)
 
-        checksum = 0
-        self.my_txBuffer[2] = cmdID
+        # Update the TX buffer with the correct values
+        self.my_txBuffer[2] = cmdID  # Data ID
+        self.my_txBuffer[4:12] = bytearray(data)  # Data content
 
         # Calculate the checksum
-        checksum = sum(self.my_txBuffer[:12]) & 0xFF
+        checksum = sum(self.my_txBuffer[:12]) & 0xFF  # Ensure checksum fits in 1 byte
         # Put it on the frame
         self.my_txBuffer[12] = checksum
         self.uart.write(self.my_txBuffer)
         self.rx_done = False  # Reset RX done flag after sending command
         self.firstpass = False
+
+        # Print the full TX buffer in hexadecimal format
+        print("<DALY-BMS DEBUG> TX Buffer: ", self.my_txBuffer.hex())
+        
 
     def receiveBytes(self, timeout=1):
         # Clear out the input buffer
@@ -412,18 +424,22 @@ class Daly_BMS_UART:
         return True
 
     def setDischargeMOS(self, sw):
-        self.sendCommand(self.COMMAND.DISCHRG_FET if sw else self.COMMAND.DISCHRG_FET_OFF)
+        self.sendCommand(self.COMMAND.DISCHRG_FET, data=[0x01 if sw else 0x00] + [0x00] * 7)
 
         if not self.receiveBytes():
             return False
+        
+        self.getStatusInfo()
 
         return True
 
     def setChargeMOS(self, sw):
-        self.sendCommand(self.COMMAND.CHRG_FET if sw else self.COMMAND.CHRG_FET_OFF)
+        self.sendCommand(self.COMMAND.CHRG_FET, data=[0x01 if sw else 0x00] + [0x00] * 7)
 
         if not self.receiveBytes():
             return False
+
+        self.getStatusInfo()
 
         return True
 
