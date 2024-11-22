@@ -10,7 +10,7 @@ This repository provides a CircuitPython interface for communicating with a Daly
 - Set State of Charge (SOC)
 - Set discharge and charge MOS states
 - Reset BMS
-- MQTT integration for remote command handling
+- MQTT integration for publishing all bms data and for remote command handling
 
 
 ## License
