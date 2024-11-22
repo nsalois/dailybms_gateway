@@ -167,11 +167,7 @@ class Daly_BMS_UART:
         self.uart.write(self.my_txBuffer)
         self.rx_done = False  # Reset RX done flag after sending command
         self.firstpass = False
-
-        # Print the full TX buffer in hexadecimal format
-        print("<DALY-BMS DEBUG> TX Buffer: ", self.my_txBuffer.hex())
         
-
     def receiveBytes(self, timeout=1):
         # Clear out the input buffer
         self.my_rxBuffer = bytearray(XFER_BUFFER_LENGTH)
