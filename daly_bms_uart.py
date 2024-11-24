@@ -1,3 +1,65 @@
+"""
+Daly BMS UART Interface
+
+This library provides a CircuitPython interface for communicating with a Daly Battery Management System (BMS) over UART.
+The interface allows you to read various parameters from the BMS, set configurations, and handle commands via MQTT.
+
+Features:
+- Read pack temperature, cell voltages, and cell temperature
+- Get min/max cell voltage and discharge/charge MOS status
+- Get status information and active faults
+- Set State of Charge (SOC)
+- Set discharge and charge MOS states
+- Reset BMS
+- MQTT integration for publishing all BMS data and for remote command handling
+
+Frame Structure:
+Each frame consists of the following components:
+1. Frame Header: A fixed byte indicating the start of the frame (0xA5).
+2. Communication Module Address: The address of the communication module (0x80).
+3. Data ID: The identifier for the type of data being sent.
+4. Data Length: The length of the data being sent (8 bytes).
+5. Data Content: The actual data being sent, which is 8 bytes.
+6. Checksum: A checksum byte for error detection.
+
+Example Command Frame:
+Byte 0: Frame Header (0xA5)
+Byte 1: Communication Module Address (0x80)
+Byte 2: Data ID (e.g., 0x90 for VOUT_IOUT_SOC)
+Byte 3: Data Length (0x08)
+Byte 4-11: Data Content (e.g., [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+Byte 12: Checksum (calculated as the sum of the first 12 bytes, masked to 8 bits)
+
+Example Response Frame:
+Byte 0: Frame Header (0xA5)
+Byte 1: Communication Module Address (0x80)
+Byte 2: Data ID (e.g., 0x90 for VOUT_IOUT_SOC)
+Byte 3: Data Length (0x08)
+Byte 4-11: Data Content (e.g., [0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0])
+Byte 12: Checksum (calculated as the sum of the first 12 bytes, masked to 8 bits)
+
+Usage:
+1. Initialize the UART and BMS interface:
+    import board
+    import busio
+    from daly_bms_uart import Daly_BMS_UART
+
+    uart = busio.UART(board.TX, board.RX, baudrate=9600)
+    bms = Daly_BMS_UART(uart)
+
+2. Use the BMS interface to read data and set configurations:
+    if bms.getPackTemp():
+        print(f"Pack Temperature: {bms.get['tempAverage']} °C")
+
+3. Handle MQTT commands:
+    while True:
+        mqtt_client.loop()
+        # Add your main loop logic here
+
+License:
+This project is licensed under the MIT License. See the LICENSE file for details.
+"""
+
 import time
 import board
 import busio
@@ -32,6 +94,9 @@ class Daly_BMS_UART:
         CELL_THRESHOLDS             = 0x59
         READ_SOC                    = 0x61
         SET_SOC                     = 0x21
+        BATTAEY_CODE                = 0x57
+        BATTERY_DETAILS             = 0x53
+        RATED_PARAMS                = 0x50
 
     def __init__(self, uart):
         self.uart = uart
@@ -47,6 +112,7 @@ class Daly_BMS_UART:
             "collectedVoltage": 0.0,
             "packCurrent": 0.0,
             "packSOC": 0.0,
+            "productionDate": "",
             "maxCellmV": 0.0,
             "maxCellVNum": 0,
             "minCellmV": 0.0,
@@ -60,6 +126,7 @@ class Daly_BMS_UART:
             "disChargeFetState": "off",
             "bmsHeartBeat": 0,
             "resCapacitymAh": 0,
+            "capacity": 0,
             "numberOfCells": 0,
             "numOfTempSensors": 0,
             "chargeState": False,
@@ -140,13 +207,23 @@ class Daly_BMS_UART:
         }
         
     def sendCommand(self, cmdID, data=None):
+        """
+        Sends a command to the BMS.
+
+        Parameters:
+        cmdID (int): The command ID to send.
+        data (list, optional): Optional data to send with the command (default is 8 bytes of 0x00).
+
+        Raises:
+        ValueError: If the length of data is not exactly 8 bytes.
+        """
         if data is None:
             data = [0x00] * 8  # Default data is 8 bytes of 0x00
 
         # Ensure data is exactly 8 bytes
         if len(data) != 8:
             raise ValueError("Data must be exactly 8 bytes")
-    
+        
         # Wait until RX is done before sending a new command, unless it's the first pass
         if not self.firstpass:
             while not self.rx_done:
@@ -169,6 +246,15 @@ class Daly_BMS_UART:
         self.firstpass = False
         
     def receiveBytes(self, timeout=1):
+        """
+        Receives bytes from the BMS.
+
+        Parameters:
+        timeout (int, optional): The timeout period in seconds (default is 1 second).
+
+        Returns:
+        bool: True if the expected number of bytes is received, False otherwise.
+        """
         # Clear out the input buffer
         self.my_rxBuffer = bytearray(XFER_BUFFER_LENGTH)
 
@@ -194,6 +280,12 @@ class Daly_BMS_UART:
         return True
 
     def validateChecksum(self):
+        """
+        Validates the checksum of the received data.
+
+        Returns:
+        bool: True if the checksum is valid, False otherwise.
+        """
         # Calculate the checksum of the received data
         calculated_checksum = sum(self.my_rxBuffer[:12]) & 0xFF  # Ensure it is an 8-bit value
         received_checksum = self.my_rxBuffer[12]
@@ -201,12 +293,21 @@ class Daly_BMS_UART:
         return calculated_checksum == received_checksum
 
     def barfRXBuffer(self):
+        """
+        Prints the contents of the RX buffer for debugging purposes.
+        """
         print("<DALY-BMS DEBUG> RX Buffer: [", end="")
         for i in range(XFER_BUFFER_LENGTH):
             print(f",0x{self.my_rxBuffer[i]:02X}", end="")
         print("]")
 
     def getTotalVoltageCurrentSOC(self):
+        """
+        Retrieves the total voltage, current, and state of charge (SOC) from the BMS.
+
+        Returns:
+        bool: True if the data is successfully retrieved, False otherwise.
+        """
         self.sendCommand(self.COMMAND.VOUT_IOUT_SOC)
         
         if not self.receiveBytes():
@@ -221,6 +322,12 @@ class Daly_BMS_UART:
         return True
 
     def getPackTemp(self):
+        """
+        Retrieves the pack temperature from the BMS.
+
+        Returns:
+        bool: True if the data is successfully retrieved, False otherwise.
+        """
         self.sendCommand(self.COMMAND.MIN_MAX_TEMPERATURE)
         if not self.receiveBytes():
             return False
@@ -230,6 +337,13 @@ class Daly_BMS_UART:
         return True
 
     def getMinMaxCellVoltage(self):
+        """
+        Returns the highest and lowest individual cell voltage, and which cell is highest/lowest.
+        Voltages are returned as floats with milliVolt precision (3 decimal places).
+
+        Returns:
+        bool: True on successful acquisition, False otherwise.
+        """
         self.sendCommand(self.COMMAND.MIN_MAX_CELL_VOLTAGE)
         if not self.receiveBytes():
             return False
@@ -241,17 +355,23 @@ class Daly_BMS_UART:
         return True
 
     def getDischargeChargeMosStatus(self):
+        """
+        Retrieves the discharge and charge MOS status from the BMS.
+
+        Returns:
+        bool: True if the data is successfully retrieved, False otherwise.
+        """
         self.sendCommand(self.COMMAND.DISCHARGE_CHARGE_MOS_STATUS)
         if not self.receiveBytes():
             return False
 
         # Parse the response and update the `get` dictionary
         status_byte = self.my_rxBuffer[4]
-        if status_byte == 0x00:
+        if (status_byte == 0x00):
             self.get["chargeDischargeStatus"] = "Idle"
-        elif status_byte == 0x01:
+        elif (status_byte == 0x01):
             self.get["chargeDischargeStatus"] = "Charge"
-        elif status_byte == 0x02:
+        elif (status_byte == 0x02):
             self.get["chargeDischargeStatus"] = "Discharge"
 
         self.get["chargeFetState"] = "on" if self.my_rxBuffer[5] == 0x01 else "off"
@@ -267,6 +387,12 @@ class Daly_BMS_UART:
         return True
 
     def getStatusInfo(self):
+        """
+        Retrieves the status information from the BMS.
+
+        Returns:
+        bool: True if the data is successfully retrieved, False otherwise.
+        """
         self.sendCommand(self.COMMAND.STATUS_INFO)
 
         if not self.receiveBytes():
@@ -286,6 +412,12 @@ class Daly_BMS_UART:
         return True
 
     def getCellVoltages(self):
+        """
+        Retrieves the cell voltages from the BMS.
+
+        Returns:
+        bool: True if the data is successfully retrieved, False otherwise.
+        """
         self.sendCommand(self.COMMAND.CELL_VOLTAGES)
         
         # Initialize a buffer to accumulate the received data
@@ -335,6 +467,12 @@ class Daly_BMS_UART:
         return True
 
     def getCellTemperature(self): 
+        """
+        Retrieves the cell temperatures from the BMS.
+
+        Returns:
+        bool: True if the data is successfully retrieved, False otherwise.
+        """
         self.sendCommand(self.COMMAND.CELL_TEMPERATURE)
 
         if not self.receiveBytes():
@@ -346,6 +484,12 @@ class Daly_BMS_UART:
         return True
     
     def getCellBalanceState(self):
+        """
+        Retrieves the cell balance state from the BMS.
+
+        Returns:
+        bool: True if the data is successfully retrieved, False otherwise.
+        """
         self.sendCommand(self.COMMAND.CELL_BALANCE_STATE)
 
         if not self.receiveBytes():
@@ -359,6 +503,15 @@ class Daly_BMS_UART:
         return True
 
     def reverse_bits(byte):
+        """
+        Reverses the bits in a byte.
+
+        Parameters:
+        byte (int): The byte to reverse.
+
+        Returns:
+        int: The byte with reversed bits.
+        """
         result = 0
         for i in range(8):
             result = (result << 1) | (byte & 1)
@@ -366,6 +519,12 @@ class Daly_BMS_UART:
         return result
 
     def getActiveFaults(self):
+        """
+        Retrieves the active faults from the BMS.
+
+        Returns:
+        bool: True if the data is successfully retrieved, False otherwise.
+        """
         self.sendCommand(self.COMMAND.FAILURE_CODES)
 
         if not self.receiveBytes():
@@ -396,6 +555,12 @@ class Daly_BMS_UART:
         return True
     
     def getPackVoltageThreshold(self):
+        """
+        Retrieves the pack voltage thresholds from the BMS.
+
+        Returns:
+        bool: True if the data is successfully retrieved, False otherwise.
+        """
         if not self.sendCommand(self.COMMAND.PACK_THRESHOLDS):
             print("<BMS > Receive failed", self.COMMAND.PACK_THRESHOLDS)
             return False
@@ -408,6 +573,12 @@ class Daly_BMS_UART:
         return True
 
     def getVoltageThreshold(self):
+        """
+        Retrieves the cell voltage thresholds from the BMS.
+
+        Returns:
+        bool: True if the data is successfully retrieved, False otherwise.
+        """
         if not self.sendCommand(self.COMMAND.CELL_THRESHOLDS):
             print("<BMS > Receive failed", self.COMMAND.CELL_THRESHOLDS)
             return False
@@ -417,6 +588,74 @@ class Daly_BMS_UART:
         self.get["minCellThreshold1"] = float((self.my_rxBuffer[8] << 8) | self.my_rxBuffer[9])
         self.get["minCellThreshold2"] = float((self.my_rxBuffer[10] << 8) | self.my_rxBuffer[11])
 
+        return True
+
+    def readCapacity(self):
+        """
+        Reads the capacity from the BMS.
+
+        Returns:
+        bool: True if the data is successfully retrieved, False otherwise.
+        """
+        self.sendCommand(self.COMMAND.RATED_PARAMS)
+        
+        if not self.receiveBytes():
+            print("No data received in readCapacity()")
+            return False
+
+        # Unpack the received data
+        capacity = (self.my_rxBuffer[4] << 24) | (self.my_rxBuffer[5] << 16) | (self.my_rxBuffer[6] << 8) | self.my_rxBuffer[7]
+        cell_volt = (self.my_rxBuffer[8] << 24) | (self.my_rxBuffer[9] << 16) | (self.my_rxBuffer[10] << 8) | self.my_rxBuffer[11]
+
+        if capacity is not None and capacity > 0:
+            self.get["capacity"] = capacity / 1000
+            return True
+        else:
+            return False
+        
+    def readProductionDate(self):
+        """
+        Reads the production date from the BMS.
+
+        Returns:
+        bool: True if the data is successfully retrieved, False otherwise.
+        """
+        self.sendCommand(self.COMMAND.BATTERY_DETAILS)
+        
+        if not self.receiveBytes():
+            print("No data received in readProductionDate()")
+            return False
+
+        # Unpack the received data
+        _, _, year, month, day = self.my_rxBuffer[4:9]
+
+        # Format the production date
+        self.get["productionDate"] = f"{year + 2000:04d}-{month:02d}-{day:02d}"
+        return True
+
+    def readBatteryCode(self):
+        """
+        Reads the battery code from the BMS.
+
+        Returns:
+        bool: True if the data is successfully retrieved, False otherwise.
+        """
+        self.sendCommand(self.COMMAND.BATTAEY_CODE)
+        
+        if not self.receiveBytes():
+            print("No data received in readBatteryCode()")
+            return False
+
+        battery_code = ""
+        for i in range(5):
+            nr = self.my_rxBuffer[4 + i * 8]
+            part = self.my_rxBuffer[5 + i * 8:12 + i * 8].decode("utf-8")
+            if nr != i + 1:
+                print("Bad battery code index")  # Use string anyhow, just warn
+            battery_code += part
+
+        if battery_code:
+            self.get["batteryCode"] = re.sub(" +", " ", battery_code.replace("\x00", " ").strip())
         return True
 
     def setDischargeMOS(self, sw):

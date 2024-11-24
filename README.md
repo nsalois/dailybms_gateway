@@ -13,6 +13,11 @@ This repository provides a CircuitPython interface for communicating with a Daly
 - MQTT integration for publishing all bms data and for remote command handling
 
 
+## Credits
+
+This project is inspired by and includes code from the [dbus-serialbattery](https://github.com/Louisvdw/dbus-serialbattery) project, specifically from the `daly.py` file. Special thanks to the contributors of that project for their work.
+
+
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.

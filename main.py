@@ -24,7 +24,10 @@ mqtt_client.connect_to_broker()
 
 # Initialize the non-blocking timer
 last_time = time.monotonic()
-interval = 10  # Interval in seconds
+interval = 0.1  # Interval in seconds
+
+bms.readCapacity()
+bms.readProductionDate()
 
 # Main loop
 while True:
@@ -52,6 +55,20 @@ while True:
                 print("Failed to get Cell Voltages")
             if not bms.getCellBalanceState():
                 print("Failed to get Cell Balance State")
+            if bms.get['capacity'] == 0:
+                print("Capacity is 0, trying to read Capacity")
+                try:
+                    if not bms.readCapacity():
+                        print("Failed to read Capacity")
+                except Exception as e:
+                    print(f"An error occurred1: {e}")
+            if bms.get['productionDate'] == "":
+                print("Production Date is empty, trying to read Production Date")
+                try:
+                   if not bms.readProductionDate():
+                       print("Failed to get Production Date")
+                except Exception as e:
+                    print(f"An error occurred2: {e}")
             if not bms.getActiveFaults():
                 print("Failed to get Active Faults")
             
@@ -76,6 +93,8 @@ while True:
         print(f"Collected Voltage:           {bms.get['collectedVoltage']}V")
         print(f"Current:                     {bms.get['packCurrent']}A")
         print(f"SOC:                         {bms.get['packSOC']}%")
+        print(f"capacity:                    {bms.get['capacity']}Ah")
+        print(f"productionDate:              {bms.get['productionDate']}")
         print(f"Pack Thresholds: Max1: {bms.get['maxPackThreshold1']}, Max2: {bms.get['maxPackThreshold2']},  Min1: {bms.get['minPackThreshold1']}, Min2: {bms.get['minPackThreshold2']}")
         print(f"Cell Thresholds: Max1: {bms.get['maxCellThreshold1']}, Max2: {bms.get['maxCellThreshold2']}, Min1: {bms.get['minCellThreshold1']}, Min2: {bms.get['minCellThreshold2']}")
 
