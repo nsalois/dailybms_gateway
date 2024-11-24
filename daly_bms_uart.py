@@ -63,6 +63,7 @@ This project is licensed under the MIT License. See the LICENSE file for details
 import time
 import board
 import busio
+import re
 
 START_BYTE      = 0xA5
 HOST_ADDRESS    = 0x80
@@ -150,10 +151,10 @@ class Daly_BMS_UART:
         }
         self.failure_codes = {
             # Byte 0
-            0: {"description": "unitOverVoltageStageOne", "active": False},
-            1: {"description": "unitOverVoltageStageTwo", "active": False},
-            2: {"description": "unitUnderVoltageStageOne", "active": False},
-            3: {"description": "unitUnderVoltageStageTwo", "active": False},
+            0: {"description": "cellOverVoltageStageOne", "active": False},
+            1: {"description": "cellOverVoltageStageTwo", "active": False},
+            2: {"description": "cellUnderVoltageStageOne", "active": False},
+            3: {"description": "cellUnderVoltageStageTwo", "active": False},
             4: {"description": "packOverVoltageStageOne", "active": False},
             5: {"description": "packOverVoltageStageTwo", "active": False},
             6: {"description": "packUnderVoltageStageOne", "active": False},
@@ -205,7 +206,16 @@ class Daly_BMS_UART:
             46: {"description": "shortCircuitProtectionFail", "active": False},
             47: {"description": "lowVoltageNoChargingFail", "active": False},
         }
-        
+
+    def barfRXBuffer(self):
+        """
+        Prints the contents of the RX buffer for debugging purposes.
+        """
+        print("<DALY-BMS DEBUG> RX Buffer: [", end="")
+        for i in range(XFER_BUFFER_LENGTH):
+            print(f",0x{self.my_rxBuffer[i]:02X}", end="")
+        print("]")
+
     def sendCommand(self, cmdID, data=None):
         """
         Sends a command to the BMS.
@@ -277,6 +287,7 @@ class Daly_BMS_UART:
             return False
 
         self.rx_done = True  # Set RX done flag
+        self.barfRXBuffer()
         return True
 
     def validateChecksum(self):
@@ -292,15 +303,31 @@ class Daly_BMS_UART:
 
         return calculated_checksum == received_checksum
 
-    def barfRXBuffer(self):
+    def setSOC(self, soc):
         """
-        Prints the contents of the RX buffer for debugging purposes.
-        """
-        print("<DALY-BMS DEBUG> RX Buffer: [", end="")
-        for i in range(XFER_BUFFER_LENGTH):
-            print(f",0x{self.my_rxBuffer[i]:02X}", end="")
-        print("]")
+        Sets the State of Charge (SOC) on the BMS.
 
+        Parameters:
+        soc (float): The SOC value to set (0.0 to 100.0).
+
+        Returns:
+        bool: True if the SOC is successfully set, False otherwise.
+        """
+        if soc < 0.0 or soc > 100.0:
+            raise ValueError("SOC value must be between 0.0 and 100.0")
+
+        # Convert the SOC to an integer value (0 to 1000)
+        soc_int = int(soc * 10)
+
+        # Send the command to set the SOC
+        self.sendCommand(self.COMMAND.SET_SOC, data=[(soc_int >> 8) & 0xFF, soc_int & 0xFF] + [0x00] * 6)
+
+        if not self.receiveBytes():
+            return False
+
+        # Check if the SOC was set successfully
+        return self.validateChecksum()
+    
     def getTotalVoltageCurrentSOC(self):
         """
         Retrieves the total voltage, current, and state of charge (SOC) from the BMS.
@@ -542,15 +569,18 @@ class Daly_BMS_UART:
         data = self.my_rxBuffer[4:12]
 
         # Convert data bytes to a binary string
-        binary_data = ''.join(f'{self.reverse_bits(byte):08b}' for byte in data)
+        binary_data = ''.join(f'{byte:08b}' for byte in data)
+        print(f"Binary Data: {binary_data}")
 
         # Update fault statuses based on the binary data
         for bit_number, fault_info in self.failure_codes.items():
-            if bit_number < len(binary_data):
-                fault_info["active"] = bool(int(binary_data[bit_number]))
+            byte_index = bit_number // 8
+            bit_index = bit_number % 8
+            fault_info["active"] = bool(data[byte_index] & (1 << bit_index))
 
         # Return only the active faults with their descriptions
         self.activeFaults = {fault_info['description']: fault_info['active'] for fault_info in self.failure_codes.values() if fault_info['active']}
+        print(f"Active Faults: {self.activeFaults}")
 
         return True
     
